@@ -1,4 +1,5 @@
 'use client'
+export const dynamic = 'force-dynamic'
 
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
@@ -59,7 +60,11 @@ export default function Home() {
   const [subjectFilter, setSubjectFilter] = useState('all')
   const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'completed'>('all')
 
-  const today = getTodayString()
+const [today, setToday] = useState('')
+
+useEffect(() => {
+  setToday(getTodayString())
+}, [])
   const totalTasks = tasks.length
   const completedTasks = tasks.filter((t) => t.is_completed).length
   const overdueTasks = tasks.filter((t) => !t.is_completed && t.due_date < today).length
