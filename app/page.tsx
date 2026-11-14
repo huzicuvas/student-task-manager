@@ -49,6 +49,9 @@ export default function Home() {
   const [authMode, setAuthMode] = useState<'login' | 'signup'>('login')
   const [authError, setAuthError] = useState('')
   const [authBusy, setAuthBusy] = useState(false)
+  const [resetSent, setResetSent] = useState(false)
+  const [newPassword, setNewPassword] = useState('')
+  const [isRecovery, setIsRecovery] = useState(false)
 
   const [title, setTitle] = useState('')
   const [subject, setSubject] = useState('')
@@ -75,17 +78,54 @@ export default function Home() {
     setToday(getTodayString())
   }, [])
 
+  function showToast(message: string, type: 'success' | 'error' = 'success') {
+    setToast({ message, type })
+    setTimeout(() => setToast(null), 3000)
+  }
+
   // Check who is logged in, on page load
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
       setUser(data.session?.user ?? null)
       setAuthLoading(false)
     })
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: listener } = supabase.auth.onAuthStateChange((event, session) => {
       setUser(session?.user ?? null)
+      if (event === 'PASSWORD_RECOVERY') {
+        setIsRecovery(true)
+      }
     })
     return () => listener.subscription.unsubscribe()
   }, [])
+
+  // Auto logout after 30 minutes of inactivity
+  useEffect(() => {
+    if (!user) return
+
+    const TIMEOUT = 30 * 60 * 1000 // 30 minutes
+    let timer: ReturnType<typeof setTimeout>
+
+    async function logoutDueToInactivity() {
+      await supabase.auth.signOut()
+      setUser(null)
+      setTasks([])
+      showToast('Session expired — logged out after 30 minutes of inactivity', 'error')
+    }
+
+    function resetTimer() {
+      clearTimeout(timer)
+      timer = setTimeout(logoutDueToInactivity, TIMEOUT)
+    }
+
+    const events = ['mousemove', 'keydown', 'click', 'scroll', 'touchstart']
+    events.forEach((e) => window.addEventListener(e, resetTimer))
+    resetTimer()
+
+    return () => {
+      clearTimeout(timer)
+      events.forEach((e) => window.removeEventListener(e, resetTimer))
+    }
+  }, [user])
 
   const totalTasks = tasks.length
   const completedTasks = tasks.filter((t) => t.is_completed).length
@@ -99,11 +139,6 @@ export default function Home() {
     if (statusFilter === 'completed' && !task.is_completed) return false
     return true
   })
-
-  function showToast(message: string, type: 'success' | 'error' = 'success') {
-    setToast({ message, type })
-    setTimeout(() => setToast(null), 3000)
-  }
 
   // Load tasks only for the logged-in user
   useEffect(() => {
@@ -148,6 +183,37 @@ export default function Home() {
     }
 
     setAuthBusy(false)
+  }
+
+  async function handleForgotPassword() {
+    if (!authEmail.trim()) {
+      setAuthError('Enter your email first')
+      return
+    }
+    setAuthError('')
+    const { error } = await supabase.auth.resetPasswordForEmail(authEmail, {
+      redirectTo: 'https://student-task-manager-rkmd.vercel.app/',
+    })
+    if (error) {
+      setAuthError(error.message)
+    } else {
+      setResetSent(true)
+      showToast('Password reset link sent to your email')
+    }
+  }
+
+  async function handleUpdatePassword(e: React.FormEvent) {
+    e.preventDefault()
+    const { error } = await supabase.auth.updateUser({ password: newPassword })
+    if (error) {
+      setAuthError(error.message)
+      return
+    }
+    setIsRecovery(false)
+    setNewPassword('')
+    showToast('Password updated — login with your new password')
+    await supabase.auth.signOut()
+    setUser(null)
   }
 
   async function handleLogout() {
@@ -307,6 +373,33 @@ export default function Home() {
     )
   }
 
+  // Password reset — shown when user comes back from email link
+  if (isRecovery) {
+    return (
+      <main className="min-h-screen bg-slate-50 p-4 sm:p-8 flex items-start justify-center">
+        {toast && (
+          <div className={`fixed top-4 left-1/2 -translate-x-1/2 z-50 px-5 py-2.5 rounded-full shadow-lg text-white text-sm font-medium ${toast.type === 'success' ? 'bg-emerald-600' : 'bg-red-600'}`}>
+            {toast.message}
+          </div>
+        )}
+        <div className="w-full max-w-md bg-white rounded-2xl p-6 shadow-sm ring-1 ring-slate-200 mt-10">
+          <h1 className="text-2xl font-bold tracking-tight text-slate-900 text-center">Set a new password</h1>
+          <p className="text-center mt-2 text-slate-500 text-sm">Enter a new password for your account.</p>
+          <form onSubmit={handleUpdatePassword} className="grid gap-3 mt-6">
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">New password</label>
+              <input type="password" placeholder="At least 6 characters" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} required className={inputStyle} />
+            </div>
+            {authError && <p className="text-red-600 text-sm">{authError}</p>}
+            <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl px-6 py-2.5 font-medium transition">
+              Update password
+            </button>
+          </form>
+        </div>
+      </main>
+    )
+  }
+
   // Not logged in — show login / signup only
   if (!user) {
     return (
@@ -330,6 +423,13 @@ export default function Home() {
               <input type="password" placeholder="At least 6 characters" value={authPassword} onChange={(e) => setAuthPassword(e.target.value)} required className={inputStyle} />
             </div>
 
+            <div className="flex justify-end">
+              <button type="button" onClick={handleForgotPassword} className="text-sm text-indigo-600 hover:text-indigo-700 font-medium">
+                Forgot password?
+              </button>
+            </div>
+
+            {resetSent && <p className="text-emerald-600 text-sm">Reset link sent — check your email inbox.</p>}
             {authError && <p className="text-red-600 text-sm">{authError}</p>}
 
             <button type="submit" disabled={authBusy} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl px-6 py-2.5 font-medium transition disabled:opacity-50">
@@ -338,11 +438,13 @@ export default function Home() {
           </form>
 
           <button
-            onClick={() => { setAuthMode(authMode === 'login' ? 'signup' : 'login'); setAuthError('') }}
+            onClick={() => { setAuthMode(authMode === 'login' ? 'signup' : 'login'); setAuthError(''); setResetSent(false) }}
             className="w-full text-center text-sm text-indigo-600 hover:text-indigo-700 font-medium mt-4"
           >
             {authMode === 'login' ? "Don't have an account? Sign up" : 'Already have an account? Login'}
           </button>
+
+          <p className="text-center text-xs text-slate-400 mt-4">Auto logout after 30 minutes of inactivity.</p>
         </div>
       </main>
     )
