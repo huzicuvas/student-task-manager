@@ -11,6 +11,7 @@ type Task = {
   due_date: string
   priority: 'low' | 'medium' | 'high'
   is_completed: boolean
+  user_id: string | null
   created_at: string
 }
 
@@ -40,6 +41,15 @@ export default function Home() {
   const [loading, setLoading] = useState(true)
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null)
 
+  // Auth state
+  const [user, setUser] = useState<any>(null)
+  const [authLoading, setAuthLoading] = useState(true)
+  const [authEmail, setAuthEmail] = useState('')
+  const [authPassword, setAuthPassword] = useState('')
+  const [authMode, setAuthMode] = useState<'login' | 'signup'>('login')
+  const [authError, setAuthError] = useState('')
+  const [authBusy, setAuthBusy] = useState(false)
+
   const [title, setTitle] = useState('')
   const [subject, setSubject] = useState('')
   const [description, setDescription] = useState('')
@@ -65,6 +75,18 @@ export default function Home() {
     setToday(getTodayString())
   }, [])
 
+  // Check who is logged in, on page load
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => {
+      setUser(data.session?.user ?? null)
+      setAuthLoading(false)
+    })
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null)
+    })
+    return () => listener.subscription.unsubscribe()
+  }, [])
+
   const totalTasks = tasks.length
   const completedTasks = tasks.filter((t) => t.is_completed).length
   const overdueTasks = tasks.filter((t) => !t.is_completed && t.due_date < today).length
@@ -83,11 +105,20 @@ export default function Home() {
     setTimeout(() => setToast(null), 3000)
   }
 
+  // Load tasks only for the logged-in user
   useEffect(() => {
+    if (!user) {
+      setTasks([])
+      setLoading(false)
+      return
+    }
+
     async function fetchTasks() {
+      setLoading(true)
       const { data, error } = await supabase
         .from('tasks')
         .select('*')
+        .eq('user_id', user.id)
         .order('due_date', { ascending: true })
 
       if (error) {
@@ -99,7 +130,32 @@ export default function Home() {
     }
 
     fetchTasks()
-  }, [])
+  }, [user])
+
+  async function handleAuth(e: React.FormEvent) {
+    e.preventDefault()
+    setAuthError('')
+    setAuthBusy(true)
+
+    if (authMode === 'signup') {
+      const { error } = await supabase.auth.signUp({ email: authEmail, password: authPassword })
+      if (error) setAuthError(error.message)
+      else showToast('Account created — you are logged in')
+    } else {
+      const { error } = await supabase.auth.signInWithPassword({ email: authEmail, password: authPassword })
+      if (error) setAuthError(error.message)
+      else showToast('Logged in successfully')
+    }
+
+    setAuthBusy(false)
+  }
+
+  async function handleLogout() {
+    await supabase.auth.signOut()
+    setUser(null)
+    setTasks([])
+    showToast('Logged out')
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -121,6 +177,7 @@ export default function Home() {
           description: description.trim() || null,
           due_date: dueDate,
           priority: priority,
+          user_id: user.id,
         },
       ])
       .select()
@@ -242,12 +299,60 @@ export default function Home() {
   const inputStyle =
     'w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-slate-900 placeholder:text-slate-400 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 transition'
 
+  if (authLoading) {
+    return (
+      <main className="min-h-screen bg-slate-50 p-4 sm:p-8">
+        <div className="max-w-3xl mx-auto text-center mt-10 text-slate-500">Loading...</div>
+      </main>
+    )
+  }
+
+  // Not logged in — show login / signup only
+  if (!user) {
+    return (
+      <main className="min-h-screen bg-slate-50 p-4 sm:p-8 flex items-start justify-center">
+        {toast && (
+          <div className={`fixed top-4 left-1/2 -translate-x-1/2 z-50 px-5 py-2.5 rounded-full shadow-lg text-white text-sm font-medium ${toast.type === 'success' ? 'bg-emerald-600' : 'bg-red-600'}`}>
+            {toast.message}
+          </div>
+        )}
+        <div className="w-full max-w-md bg-white rounded-2xl p-6 shadow-sm ring-1 ring-slate-200 mt-10">
+          <h1 className="text-2xl font-bold tracking-tight text-slate-900 text-center">Student Task Manager</h1>
+          <p className="text-center mt-2 text-slate-500 text-sm">Login to see your own tasks.</p>
+
+          <form onSubmit={handleAuth} className="grid gap-3 mt-6">
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Email</label>
+              <input type="email" placeholder="you@example.com" value={authEmail} onChange={(e) => setAuthEmail(e.target.value)} required className={inputStyle} />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Password</label>
+              <input type="password" placeholder="At least 6 characters" value={authPassword} onChange={(e) => setAuthPassword(e.target.value)} required className={inputStyle} />
+            </div>
+
+            {authError && <p className="text-red-600 text-sm">{authError}</p>}
+
+            <button type="submit" disabled={authBusy} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl px-6 py-2.5 font-medium transition disabled:opacity-50">
+              {authBusy ? 'Please wait...' : authMode === 'login' ? 'Login' : 'Create account'}
+            </button>
+          </form>
+
+          <button
+            onClick={() => { setAuthMode(authMode === 'login' ? 'signup' : 'login'); setAuthError('') }}
+            className="w-full text-center text-sm text-indigo-600 hover:text-indigo-700 font-medium mt-4"
+          >
+            {authMode === 'login' ? "Don't have an account? Sign up" : 'Already have an account? Login'}
+          </button>
+        </div>
+      </main>
+    )
+  }
+
   if (loading) {
     return (
       <main className="min-h-screen bg-slate-50 p-4 sm:p-8">
         <div className="max-w-3xl mx-auto">
           <h1 className="text-3xl sm:text-4xl font-bold tracking-tight text-slate-900 text-center">Student Task Manager</h1>
-          <p className="text-center mt-2 text-slate-500">Stay on top of your studies, one task at a time.</p>
           <p className="text-center mt-10 text-slate-500">Loading tasks...</p>
         </div>
       </main>
@@ -263,7 +368,12 @@ export default function Home() {
       )}
 
       <div className="max-w-3xl mx-auto">
-        <h1 className="text-3xl sm:text-4xl font-bold tracking-tight text-slate-900 text-center">Student Task Manager</h1>
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-sm text-slate-500 truncate">Logged in as <span className="font-medium text-slate-700">{user.email}</span></p>
+          <button onClick={handleLogout} className="shrink-0 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 px-4 py-2 text-sm font-medium">Logout</button>
+        </div>
+
+        <h1 className="text-3xl sm:text-4xl font-bold tracking-tight text-slate-900 text-center mt-6">Student Task Manager</h1>
         <p className="text-center mt-2 text-slate-500">Stay on top of your studies, one task at a time.</p>
 
         <div className="mt-8 grid grid-cols-3 gap-3 sm:gap-4">
